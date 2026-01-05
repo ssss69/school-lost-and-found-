@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.5.1/dist/confetti.browser.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Findr | Campus Lost & Found</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap" rel="stylesheet">
+    
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
+
+    <style>
+        :root {
+            --primary: #6366f1; --accent: #f43f5e;
+            --bg: #f1f5f9; --card-bg: #ffffff;
+            --text-main: #1e293b; --text-sub: #64748b;
+            --border: rgba(0, 0, 0, 0.05); --glass: rgba(255, 255, 255, 0.7);
+        }
+
+        [data-theme="dark"] {
+            --bg: #0f172a; --card-bg: #1e293b;
+            --text-main: #f8fafc; --text-sub: #94a3b8;
+            --border: rgba(255, 255, 255, 0.1); --glass: rgba(30, 41, 59, 0.7);
+        }
+
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background: var(--bg); margin: 0; color: var(--text-main); transition: 0.3s; }
+        nav { padding: 15px 50px; display: flex; justify-content: space-between; align-items: center; backdrop-filter: blur(10px); background: var(--glass); position: sticky; top: 0; z-index: 1000; border-bottom: 1px solid var(--border); }
+        .logo { font-weight: 800; font-size: 1.5rem; color: var(--primary); }
+        .theme-toggle { background: var(--primary); color: white; border: none; padding: 8px 15px; border-radius: 20px; cursor: pointer; font-weight: 600; }
+        
+        .main-content { max-width: 1000px; margin: 40px auto; padding: 0 20px; }
+        .post-box { background: var(--card-bg); padding: 30px; border-radius: 24px; box-shadow: 0 20px 40px rgba(0,0,0,0.1); margin-bottom: 40px; border: 1px solid var(--border); }
+        
+        input, textarea, select { background: var(--bg); color: var(--text-main); border: 1px solid var(--border); padding: 12px; border-radius: 12px; margin-bottom: 15px; width: 100%; box-sizing: border-box; }
+        .btn-post { background: var(--primary); color: white; border: none; padding: 15px; border-radius: 12px; font-weight: 800; width: 100%; cursor: pointer; }
+        
+        #itemsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 25px; }
+        .item-card { background: var(--card-bg); border-radius: 20px; overflow: hidden; border: 1px solid var(--border); transition: 0.3s; }
+        .item-card img { width: 100%; height: 200px; object-fit: cover; }
+        .img-placeholder { height: 200px; background: linear-gradient(45deg, var(--primary), var(--accent)); display: flex; align-items: center; justify-content: center; color: white; font-weight: 800; font-size: 3rem; }
+        .item-info { padding: 20px; }
+        
+        .status-badge { display: inline-block; padding: 4px 12px; border-radius: 8px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; margin-bottom: 10px; }
+        .status-lost { background: #fee2e2; color: #ef4444; }
+        .status-found { background: #dcfce7; color: #22c55e; }
+    </style>
+</head>
+<body data-theme="light">
+
+<nav>
+    <div class="logo">FINDR.</div>
+    <button class="theme-toggle" onclick="toggleTheme()">🌙 Toggle Theme</button>
+</nav>
+
+<div class="main-content">
+    <div class="post-box">
+        <h2 style="margin-top:0">Create Post</h2>
+        <div style="display: flex; gap: 10px;">
+            <select id="itemStatus" style="flex: 1;">
+                <option value="Found">🟢 Found</option>
+                <option value="Lost">🔴 Lost</option>
+            </select>
+            <input type="text" id="itemTitle" placeholder="What is the item?">
+        </div>
+        <textarea id="itemDesc" placeholder="Description or location..."></textarea>
+        <input type="file" id="itemImage" accept="image/*">
+        <button class="btn-post" id="submitBtn" onclick="addItem()">Post Item</button>
+    </div>
+
+    <input type="text" id="searchBar" onkeyup="filterItems()" placeholder="🔍 Search items..." 
+           style="background: var(--card-bg); padding: 20px; border-radius: 15px; margin-bottom: 30px;">
+
+    <div id="itemsGrid"></div>
+</div>
+
+<script>
+    // 1. YOUR FIREBASE CONFIG
+    const firebaseConfig = {
+        apiKey: "YOUR_API_KEY",
+        authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+        projectId: "YOUR_PROJECT_ID",
+        storageBucket: "YOUR_PROJECT_ID.appspot.com",
+        messagingSenderId: "YOUR_SENDER_ID",
+        appId: "YOUR_APP_ID"
+    };
+
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+    const storage = firebase.storage();
+
+    let allPosts = [];
+
+    // 2. THEME LOGIC
+    function toggleTheme() {
+        const newTheme = document.body.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+        document.body.setAttribute('data-theme', newTheme);
+        localStorage.setItem('theme', newTheme);
+    }
+    if (localStorage.getItem('theme') === 'dark') document.body.setAttribute('data-theme', 'dark');
+
+    // 3. ADD ITEM TO FIREBASE
+    async function addItem() {
+        const btn = document.getElementById('submitBtn');
+        const title = document.getElementById('itemTitle').value;
+        const desc = document.getElementById('itemDesc').value;
+        const status = document.getElementById('itemStatus').value;
+        const file = document.getElementById('itemImage').files[0];
+
+        if (!title) return alert("Title is required!");
+        
+        btn.disabled = true;
+        btn.innerText = "Uploading...";
+
+        let imageUrl = null;
+
+        try {
+            // Upload Image if selected
+            if (file) {
+                const fileRef = storage.ref().child(`items/${Date.now()}_${file.name}`);
+                await fileRef.put(file);
+                imageUrl = await fileRef.getDownloadURL();
+            }
+
+            // Save to Firestore
+            await db.collection("posts").add({
+                title: title,
+                desc: desc,
+                status: status,
+                image: imageUrl,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+
+            // Clear Form
+            document.getElementById('itemTitle').value = '';
+            document.getElementById('itemDesc').value = '';
+            document.getElementById('itemImage').value = '';
+            alert("Post Successful!");
+        } catch (e) {
+            console.error(e);
+            alert("Error uploading post.");
+        }
+        btn.disabled = false;
+        btn.innerText = "Post Item";
+    }
+
+    // 4. FETCH ITEMS (REAL-TIME)
+    db.collection("posts").orderBy("createdAt", "desc").onSnapshot((snapshot) => {
+        allPosts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        renderPosts(allPosts);
+    });
+
+    function renderPosts(items) {
+        const grid = document.getElementById('itemsGrid');
+        grid.innerHTML = '';
+        items.forEach(post => {
+            const badgeClass = post.status === 'Lost' ? 'status-lost' : 'status-found';
+            const imageHtml = post.image 
+                ? `<img src="${post.image}">` 
+                : `<div class="img-placeholder">${post.title.charAt(0)}</div>`;
+
+            grid.innerHTML += `
+                <div class="item-card">
+                    ${imageHtml}
+                    <div class="item-info">
+                        <span class="status-badge ${badgeClass}">${post.status}</span>
+                        <h3>${post.title}</h3>
+                        <p>${post.desc}</p>
+                    </div>
+                </div>
+            `;
+        });
+    }
+
+    function filterItems() {
+        const q = document.getElementById('searchBar').value.toLowerCase();
+        const filtered = allPosts.filter(p => p.title.toLowerCase().includes(q) || p.desc.toLowerCase().includes(q));
+        renderPosts(filtered);
+    }
+</script>
+</body>
+</html>
